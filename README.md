@@ -30,16 +30,16 @@ ncmdump [FILES]...
 
 ### More options
 
-```
-Usage: ncmdump [OPTIONS] [FILES]...
+```text
+Usage: ncmdump [OPTIONS] [TARGETS]...
 
 Arguments:
-  [FILES]...  Specified the files to convert
+  [TARGETS]...  Specified the targets to convert
 
 Options:
   -o, --output <OUTPUT>  Specified the output directory. Default it's the same directory with input file
   -v, --verbose          Verbosely list files processing
-  -i, --info             Only show the ncm information of ncm files. If not ncm file, will print empty object
+  -r, --recursive        Recursively find files that need to be converted
   -h, --help             Print help
   -V, --version          Print version
 ```

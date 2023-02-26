@@ -22,6 +22,8 @@ enum Error {
     PathError,
     #[error("Invalid file format")]
     FormatError,
+    #[error("No target can be converted")]
+    NoTargetError,
 }
 
 #[derive(Debug, Parser)]
@@ -134,33 +136,42 @@ impl NcmdumpCli {
         Ok(paths)
     }
 
-    fn dump(&self, item: &Wrapper, progress: &ProgressBar) -> Result<()> {
+    fn get_info(&self, paths: Vec<PathBuf>, progress: &ProgressBar) -> Vec<Wrapper> {
+        let mut result = Vec::new();
+        for path in paths {
+            progress.set_message(path.file_name().unwrap().to_str().unwrap().to_string());
+            if let Ok(item) = Wrapper::from_path(path) {
+                match item.format {
+                    FileType::Other => {}
+                    _ => result.push(item),
+                }
+            };
+            progress.inc(1)
+        }
+        progress.finish();
+        result
+    }
+
+    fn get_data(&self, mut dump: impl Read, progress: &ProgressBar) -> Result<Vec<u8>> {
         let mut data = Vec::new();
-        let file = File::open(&item.path)?;
         let mut buffer = [0; 1024];
-        match item.format {
-            FileType::Ncm => {
-                let mut dump = Ncmdump::from_reader(file)?;
-                while let Ok(size) = dump.read(&mut buffer) {
-                    if size == 0 {
-                        break;
-                    }
-                    data.write_all(&buffer[..size])?;
-                    progress.inc(size as u64);
-                }
+        while let Ok(size) = dump.read(&mut buffer) {
+            if size == 0 {
+                break;
             }
-            FileType::Qmc => {
-                let mut dump = QmcDump::from_reader(file)?;
-                while let Ok(size) = dump.read(&mut buffer) {
-                    if size == 0 {
-                        break;
-                    }
-                    data.write_all(&buffer[..size])?;
-                    progress.inc(size as u64);
-                }
-            }
-            FileType::Other => return Ok(()),
-        };
+            data.write_all(&buffer[..size])?;
+            progress.inc(size as u64);
+        }
+        Ok(data)
+    }
+
+    fn dump(&self, item: &Wrapper, progress: &ProgressBar) -> Result<()> {
+        let file = File::open(&item.path)?;
+        let data = match item.format {
+            FileType::Ncm => self.get_data(Ncmdump::from_reader(file)?, &progress),
+            FileType::Qmc => self.get_data(QmcDump::from_reader(file)?, &progress),
+            FileType::Other => Err(Error::FormatError.into()),
+        }?;
         let ext = match data[..4] {
             [0x66, 0x4C, 0x61, 0x43] => Ok("flac"),
             [0x49, 0x44, 0x33, _] => Ok("mp3"),
@@ -172,35 +183,18 @@ impl NcmdumpCli {
         Ok(())
     }
 
-    fn get_info(&self, paths: Vec<PathBuf>, progress: &ProgressBar) -> Vec<Wrapper> {
-        let mut result = Vec::new();
-        for path in paths {
-            progress.set_message(path.file_name().unwrap().to_str().unwrap().to_string());
-            let item = match Wrapper::from_path(path) {
-                Ok(x) => x,
-                Err(_) => {
-                    progress.inc(1);
-                    continue;
-                }
-            };
-            match item.format {
-                FileType::Other => {}
-                _ => result.push(item),
-            }
-            progress.inc(1)
-        }
-        progress.finish();
-        result
-    }
-
     fn start(&self) -> Result<()> {
+        if self.command.matchers.is_empty() {
+            return Err(Error::NoTargetError.into());
+        }
+
         let progress_style_run = ProgressStyle::with_template(
-            "[{elapsed_precise:.blue}] [{bar:40.cyan/blue}] {pos:>10!.cyan}/{len:<10!.blue} | {percent:>3!}% | {msg}",
+            "[{elapsed_precise:.blue}] [{bar:40.cyan}] {pos:>10!.cyan}/{len:<10!.blue} | {percent:>3!}% | {msg}",
         )?
-        .progress_chars("=>-");
+        .progress_chars("=> ");
         let progress_style_dump = ProgressStyle::with_template(
-            "[{elapsed_precise:.blue}] [{bar:40.cyan/blue}] {bytes:>10!.cyan}/{total_bytes:<10!.blue} | {percent:>3!}% | {bytes_per_sec}",
-        )?.progress_chars("=>-");
+            "[{elapsed_precise:.blue}] [{bar:40.cyan}] {bytes:>10!.cyan}/{total_bytes:<10!.blue} | {percent:>3!}% | {bytes_per_sec}",
+        )?.progress_chars("=> ");
 
         let multi_progress = MultiProgress::new();
         let paths = self.get_paths()?;
@@ -209,38 +203,44 @@ impl NcmdumpCli {
             .with_style(progress_style_run.clone());
         let items = self.get_info(paths, &progress_info);
 
-        if items.is_empty() {
-        } else if items.len() == 1 {
-            let item = items.get(0).unwrap();
-            let progress =
-                multi_progress.add(ProgressBar::new(item.size).with_style(progress_style_dump));
-            self.dump(item, &progress)?;
-            if self.command.verbose {
-                progress.println(format!("Converting file {}\t complete!", item.name));
-            }
-            progress.finish();
-        } else {
-            let progress_run = multi_progress
-                .add(ProgressBar::new(items.len() as u64).with_style(progress_style_run));
-            let progress_dump =
-                multi_progress.add(ProgressBar::new(1).with_style(progress_style_dump));
-            for item in items {
-                progress_run.set_message(item.name.clone());
-                progress_dump.reset();
-                progress_dump.set_length(item.size);
-                match self.dump(&item, &progress_dump) {
-                    Ok(_) => {
-                        if self.command.verbose {
-                            multi_progress
-                                .println(format!("Converting file {}\t complete!", item.name))?;
-                        }
-                        progress_run.inc(1);
-                        progress_dump.finish();
-                    }
-                    Err(e) => println!("{:?}", e),
+        match items.len() {
+            0 => return Err(Error::NoTargetError.into()),
+            1 => {
+                let item = items.get(0).unwrap();
+                let progress =
+                    multi_progress.add(ProgressBar::new(item.size).with_style(progress_style_dump));
+                self.dump(item, &progress)?;
+                if self.command.verbose {
+                    progress.println(format!("Converting file {}\t complete!", item.name));
                 }
+                progress.finish();
             }
-            progress_run.finish();
+            _ => {
+                let progress_run = multi_progress
+                    .add(ProgressBar::new(items.len() as u64).with_style(progress_style_run));
+                let progress_dump =
+                    multi_progress.add(ProgressBar::new(1).with_style(progress_style_dump));
+
+                for item in items {
+                    progress_run.set_message(item.name.clone());
+                    progress_dump.reset();
+                    progress_dump.set_length(item.size);
+                    match self.dump(&item, &progress_dump) {
+                        Ok(_) => {
+                            if self.command.verbose {
+                                multi_progress.println(format!(
+                                    "Converting file {}\t complete!",
+                                    item.name
+                                ))?;
+                            }
+                            progress_run.inc(1);
+                            progress_dump.finish();
+                        }
+                        Err(e) => println!("{:?}", e),
+                    }
+                }
+                progress_run.finish();
+            }
         }
 
         Ok(())
