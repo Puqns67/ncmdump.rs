@@ -32,15 +32,15 @@ enum Error {
     PathError,
     #[error("Invalid file format")]
     FormatError,
-    #[error("No target can be converted")]
-    NoTargetError,
+    #[error("No file can be converted")]
+    NoFileError,
 }
 
 #[derive(Debug, Parser)]
 #[command(name = "ncmdump", bin_name = "ncmdump", about, version)]
 struct Command {
-    /// Specified the targets to convert.
-    #[arg(value_name = "TARGETS")]
+    /// Specified the files to convert.
+    #[arg(value_name = "FILE_MATCHERS")]
     matchers: Vec<String>,
 
     /// Specified the output directory.
@@ -192,9 +192,9 @@ impl NcmdumpCli {
         let file = File::open(&item.path)?;
         let data = match item.format {
             #[cfg(feature = "ncmdump")]
-            FileType::Ncm => self.get_data(Ncmdump::from_reader(file)?, &progress),
+            FileType::Ncm => self.get_data(Ncmdump::from_reader(file)?, progress),
             #[cfg(feature = "qmcdump")]
-            FileType::Qmc => self.get_data(QmcDump::from_reader(file)?, &progress),
+            FileType::Qmc => self.get_data(QmcDump::from_reader(file)?, progress),
             FileType::Other => Err(Error::FormatError.into()),
         }?;
         let ext = match data[..4] {
@@ -210,7 +210,7 @@ impl NcmdumpCli {
 
     fn start(&self) -> Result<()> {
         if self.command.matchers.is_empty() {
-            return Err(Error::NoTargetError.into());
+            return Err(Error::NoFileError.into());
         }
 
         let progress_style_run =
@@ -226,7 +226,7 @@ impl NcmdumpCli {
         let items = self.get_info(paths, &progress_info);
 
         match items.len() {
-            0 => return Err(Error::NoTargetError.into()),
+            0 => return Err(Error::NoFileError.into()),
             1 => {
                 let item = items.get(0).unwrap();
                 let progress = self
