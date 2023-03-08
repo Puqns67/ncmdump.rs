@@ -29,11 +29,11 @@ enum FileType {
 #[derive(Clone, Debug, Error)]
 enum Error {
     #[error("Can't resolve the path")]
-    PathError,
+    Path,
     #[error("Invalid file format")]
-    FormatError,
+    Format,
     #[error("No file can be converted")]
-    NoFileError,
+    NoFile,
 }
 
 #[derive(Debug, Parser)]
@@ -47,10 +47,6 @@ struct Command {
     /// Default it's the same directory with input file.
     #[arg(short = 'o', long = "output")]
     output: Option<String>,
-
-    /// Verbosely list files processing.
-    #[arg(short = 'v', long = "verbose")]
-    verbose: bool,
 
     /// Recursively find files that need to be converted.
     #[arg(short = 'r', long = "recursive")]
@@ -111,10 +107,10 @@ impl NcmdumpCli {
         output: &Option<String>,
     ) -> Result<PathBuf> {
         let parent = match output {
-            None => file_path.parent().ok_or(Error::PathError)?,
+            None => file_path.parent().ok_or(Error::Path)?,
             Some(p) => Path::new(p),
         };
-        let file_name = file_path.file_stem().ok_or(Error::PathError)?;
+        let file_name = file_path.file_stem().ok_or(Error::Path)?;
         let path = parent.join(file_name).with_extension(format);
         Ok(path)
     }
@@ -158,19 +154,16 @@ impl NcmdumpCli {
         Ok(paths)
     }
 
-    fn get_info(&self, paths: Vec<PathBuf>, progress: &ProgressBar) -> Vec<Wrapper> {
+    fn get_info(&self, paths: Vec<PathBuf>) -> Vec<Wrapper> {
         let mut result = Vec::new();
         for path in paths {
-            progress.set_message(path.file_name().unwrap().to_str().unwrap().to_string());
             if let Ok(item) = Wrapper::from_path(path) {
                 match item.format {
                     FileType::Other => {}
                     _ => result.push(item),
                 }
             };
-            progress.inc(1)
         }
-        progress.finish();
         result
     }
 
@@ -195,12 +188,12 @@ impl NcmdumpCli {
             FileType::Ncm => self.get_data(Ncmdump::from_reader(file)?, progress),
             #[cfg(feature = "qmcdump")]
             FileType::Qmc => self.get_data(QmcDump::from_reader(file)?, progress),
-            FileType::Other => Err(Error::FormatError.into()),
+            FileType::Other => Err(Error::Format.into()),
         }?;
         let ext = match data[..4] {
             [0x66, 0x4C, 0x61, 0x43] => Ok("flac"),
             [0x49, 0x44, 0x33, _] => Ok("mp3"),
-            _ => Err(Error::FormatError),
+            _ => Err(Error::Format),
         }?;
         let output_file = self.get_output(&item.path, ext, &self.command.output)?;
         let mut target = File::options().create(true).write(true).open(output_file)?;
@@ -210,68 +203,38 @@ impl NcmdumpCli {
 
     fn start(&self) -> Result<()> {
         if self.command.matchers.is_empty() {
-            return Err(Error::NoFileError.into());
+            return Err(Error::NoFile.into());
         }
-
-        let progress_style_run =
-            ProgressStyle::with_template(PROGRESS_STYLE_RUN)?.progress_chars(PROGRESS_STYLE_BAR);
-        let progress_style_dump =
-            ProgressStyle::with_template(PROGRESS_STYLE_DUMP)?.progress_chars(PROGRESS_STYLE_BAR);
-
         let paths = self.get_paths()?;
-        let progress_info = self
+        let items = self.get_info(paths);
+        if items.is_empty() {
+            return Err(Error::NoFile.into());
+        }
+
+        let progress_style_run = ProgressStyle::with_template(PROGRESS_STYLE_RUN)?;
+        let progress_style_dump = ProgressStyle::with_template(PROGRESS_STYLE_DUMP)?;
+
+        let progress_run = self
             .progress
-            .add(ProgressBar::new(paths.len() as u64))
-            .with_style(progress_style_run.clone());
-        let items = self.get_info(paths, &progress_info);
+            .add(ProgressBar::new(items.len() as u64).with_style(progress_style_run));
 
-        match items.len() {
-            0 => return Err(Error::NoFileError.into()),
-            1 => {
-                let item = items.get(0).unwrap();
-                let progress = self
-                    .progress
-                    .add(ProgressBar::new(item.size).with_style(progress_style_dump));
-                self.dump(item, &progress)?;
-                if self.command.verbose {
-                    self.progress
-                        .println(format!("Converting file {}\t complete!", item.name))?;
-                }
-            }
-            _ => {
-                let progress_run = self
-                    .progress
-                    .add(ProgressBar::new(items.len() as u64).with_style(progress_style_run));
-                let progress_dump = self
-                    .progress
-                    .add(ProgressBar::new(1).with_style(progress_style_dump));
-
-                for item in items {
-                    progress_run.set_message(item.name.clone());
-                    progress_dump.reset();
-                    progress_dump.set_length(item.size);
-                    match self.dump(&item, &progress_dump) {
-                        Ok(_) => {
-                            if self.command.verbose {
-                                self.progress.println(format!(
-                                    "Converting file {}\t complete!",
-                                    item.name
-                                ))?;
-                            }
-                            progress_run.inc(1);
-                        }
-                        Err(e) => println!("{:?}", e),
-                    }
-                }
-                progress_run.finish();
+        for item in items {
+            let current = self.progress.insert(
+                0,
+                ProgressBar::new(item.size).with_style(progress_style_dump.clone()),
+            );
+            current.set_message(item.name.clone());
+            match self.dump(&item, &current) {
+                Ok(_) => progress_run.inc(1),
+                Err(e) => println!("{:?}", e),
             }
         }
+        progress_run.finish();
 
         Ok(())
     }
 }
 
 fn main() -> Result<()> {
-    let app = NcmdumpCli::from_command(Command::parse());
-    app.start()
+    NcmdumpCli::from_command(Command::parse()).start()
 }
