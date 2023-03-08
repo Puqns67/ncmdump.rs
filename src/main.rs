@@ -54,6 +54,10 @@ struct Command {
     #[arg(short = 'o', long = "output")]
     output: Option<String>,
 
+    /// Verbosely list files processing.
+    #[arg(short = 'v', long = "verbose")]
+    verbose: bool,
+
     /// Recursively find files that need to be converted.
     #[arg(short = 'r', long = "recursive")]
     recursive: bool,
@@ -160,16 +164,19 @@ impl NcmdumpCli {
         Ok(paths)
     }
 
-    fn get_info(&self, paths: Vec<PathBuf>) -> Vec<Wrapper> {
+    fn get_info(&self, paths: Vec<PathBuf>, progress: &ProgressBar) -> Vec<Wrapper> {
         let mut result = Vec::new();
         for path in paths {
+            progress.set_message(path.file_name().unwrap().to_str().unwrap().to_string());
             if let Ok(item) = Wrapper::from_path(path) {
                 match item.format {
                     FileType::Other => {}
                     _ => result.push(item),
                 }
             };
+            progress.inc(1)
         }
+        progress.finish();
         result
     }
 
@@ -249,36 +256,69 @@ impl NcmdumpCli {
         if self.command.matchers.is_empty() {
             return Err(Errors::NoFileError.into());
         }
+
+        let progress_style_run =
+            ProgressStyle::with_template(PROGRESS_STYLE_RUN)?.progress_chars(PROGRESS_STYLE_BAR);
+        let progress_style_dump =
+            ProgressStyle::with_template(PROGRESS_STYLE_DUMP)?.progress_chars(PROGRESS_STYLE_BAR);
+
         let paths = self.get_paths()?;
-        let items = self.get_info(paths);
+        let progress_info = self
+            .progress
+            .add(ProgressBar::new(paths.len() as u64))
+            .with_style(progress_style_run.clone());
+        let items = self.get_info(paths, &progress_info);
         if items.is_empty() {
             return Err(Errors::NoFileError.into());
         }
 
-        let progress_style_run = ProgressStyle::with_template(PROGRESS_STYLE_RUN)?;
-        let progress_style_dump = ProgressStyle::with_template(PROGRESS_STYLE_DUMP)?;
+        match items.len() {
+            0 => return Err(Errors::NoFileError.into()),
+            1 => {
+                let item = items.get(0).unwrap();
+                let progress = self
+                    .progress
+                    .add(ProgressBar::new(item.size).with_style(progress_style_dump));
+                self.dump(item, &progress)?;
+                if self.command.verbose {
+                    self.progress
+                        .println(format!("Converting file {}\t complete!", item.name))?;
+                }
+            }
+            _ => {
+                let progress_run = self
+                    .progress
+                    .add(ProgressBar::new(items.len() as u64).with_style(progress_style_run));
+                let progress_dump = self
+                    .progress
+                    .add(ProgressBar::new(1).with_style(progress_style_dump));
 
-        let progress_run = self
-            .progress
-            .add(ProgressBar::new(items.len() as u64).with_style(progress_style_run));
-
-        for item in items {
-            let current = self.progress.insert(
-                0,
-                ProgressBar::new(item.size).with_style(progress_style_dump.clone()),
-            );
-            current.set_message(item.name.clone());
-            match self.dump(&item, &current) {
-                Ok(_) => progress_run.inc(1),
-                Err(e) => println!("{:?}", e),
+                for item in items {
+                    progress_run.set_message(item.name.clone());
+                    progress_dump.reset();
+                    progress_dump.set_length(item.size);
+                    match self.dump(&item, &progress_dump) {
+                        Ok(_) => {
+                            if self.command.verbose {
+                                self.progress.println(format!(
+                                    "Converting file {}\t complete!",
+                                    item.name
+                                ))?;
+                            }
+                            progress_run.inc(1);
+                        }
+                        Err(e) => println!("{:?}", e),
+                    }
+                }
+                progress_run.finish();
             }
         }
-        progress_run.finish();
 
         Ok(())
     }
 }
 
 fn main() -> Result<()> {
-    NcmdumpCli::from_command(Command::parse()).start()
+    let app = NcmdumpCli::from_command(Command::parse());
+    app.start()
 }
