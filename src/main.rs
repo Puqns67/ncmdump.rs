@@ -5,10 +5,14 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use clap::Parser;
 use glob::glob;
-use id3::frame::{Picture, PictureType};
-use id3::{Tag, TagLike, Version};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use thiserror::Error;
+
+#[cfg(feature = "ncmdump")]
+use id3::{
+    frame::{Picture, PictureType},
+    Error as TagError, ErrorKind as TagErrorKind, Tag, TagLike, Version as TagVersion,
+};
 
 #[cfg(feature = "ncmdump")]
 use ncmdump::Ncmdump;
@@ -198,11 +202,24 @@ impl NcmdumpCli {
             _ => Err(Errors::InvalidFormat),
         }?;
         let output_file = self.get_output(&item.path, ext, &self.command.output)?;
-        let mut target = File::options().create(true).write(true).open(output_file)?;
+        let mut target = File::options()
+            .create(true)
+            .write(true)
+            .read(true)
+            .open(output_file.clone())?;
         target.write_all(&data)?;
+        target.flush()?;
+        #[cfg(feature = "ncmdump")]
         if let FileType::Ncm = item.format {
             let mut reader = Ncmdump::from_reader(File::open(&item.path)?)?;
-            let mut tag = Tag::new();
+            let mut tag = match Tag::read_from(&target) {
+                Ok(tag) => tag,
+                Err(TagError {
+                    kind: TagErrorKind::NoTag,
+                    ..
+                }) => Tag::new(),
+                Err(err) => return Err(Box::new(err).into()),
+            };
             if let Ok(info) = reader.get_info() {
                 tag.set_title(info.name);
                 tag.set_artist(
@@ -217,14 +234,14 @@ impl NcmdumpCli {
             }
             if let Ok(image) = reader.get_image() {
                 tag.add_frame(Picture {
-                    mime_type: "image/png".to_string(),
-                    picture_type: PictureType::Other,
-                    description: "some other image".to_string(),
+                    mime_type: String::from("image/jpeg"),
+                    picture_type: PictureType::CoverFront,
+                    description: String::from("CoverFront"),
                     data: image,
                 });
             }
-            tag.write_to(&mut target, Version::Id3v24)?;
-        }
+            tag.write_to_path(output_file, TagVersion::Id3v24)?;
+        };
         Ok(())
     }
 
