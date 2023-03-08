@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use clap::Parser;
 use glob::glob;
+use id3::frame::{Picture, PictureType};
+use id3::{Tag, TagLike, Version};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use thiserror::Error;
 
@@ -27,13 +29,13 @@ enum FileType {
 }
 
 #[derive(Clone, Debug, Error)]
-enum Error {
+enum Errors {
     #[error("Can't resolve the path")]
-    Path,
+    InvalidPath,
     #[error("Invalid file format")]
-    Format,
+    InvalidFormat,
     #[error("No file can be converted")]
-    NoFile,
+    NoFileError,
 }
 
 #[derive(Debug, Parser)]
@@ -107,10 +109,10 @@ impl NcmdumpCli {
         output: &Option<String>,
     ) -> Result<PathBuf> {
         let parent = match output {
-            None => file_path.parent().ok_or(Error::Path)?,
+            None => file_path.parent().ok_or(Errors::InvalidPath)?,
             Some(p) => Path::new(p),
         };
-        let file_name = file_path.file_stem().ok_or(Error::Path)?;
+        let file_name = file_path.file_stem().ok_or(Errors::InvalidPath)?;
         let path = parent.join(file_name).with_extension(format);
         Ok(path)
     }
@@ -188,27 +190,52 @@ impl NcmdumpCli {
             FileType::Ncm => self.get_data(Ncmdump::from_reader(file)?, progress),
             #[cfg(feature = "qmcdump")]
             FileType::Qmc => self.get_data(QmcDump::from_reader(file)?, progress),
-            FileType::Other => Err(Error::Format.into()),
+            FileType::Other => Err(Errors::InvalidFormat.into()),
         }?;
         let ext = match data[..4] {
             [0x66, 0x4C, 0x61, 0x43] => Ok("flac"),
             [0x49, 0x44, 0x33, _] => Ok("mp3"),
-            _ => Err(Error::Format),
+            _ => Err(Errors::InvalidFormat),
         }?;
         let output_file = self.get_output(&item.path, ext, &self.command.output)?;
         let mut target = File::options().create(true).write(true).open(output_file)?;
         target.write_all(&data)?;
+        if let FileType::Ncm = item.format {
+            let mut reader = Ncmdump::from_reader(File::open(&item.path)?)?;
+            let mut tag = Tag::new();
+            if let Ok(info) = reader.get_info() {
+                tag.set_title(info.name);
+                tag.set_artist(
+                    info.artist
+                        .iter()
+                        .map(|(i, _)| i.to_owned())
+                        .collect::<Vec<String>>()
+                        .join(","),
+                );
+                tag.set_album(info.album);
+                tag.set_duration(info.duration as u32);
+            }
+            if let Ok(image) = reader.get_image() {
+                tag.add_frame(Picture {
+                    mime_type: "image/png".to_string(),
+                    picture_type: PictureType::Other,
+                    description: "some other image".to_string(),
+                    data: image,
+                });
+            }
+            tag.write_to(&mut target, Version::Id3v24)?;
+        }
         Ok(())
     }
 
     fn start(&self) -> Result<()> {
         if self.command.matchers.is_empty() {
-            return Err(Error::NoFile.into());
+            return Err(Errors::NoFileError.into());
         }
         let paths = self.get_paths()?;
         let items = self.get_info(paths);
         if items.is_empty() {
-            return Err(Error::NoFile.into());
+            return Err(Errors::NoFileError.into());
         }
 
         let progress_style_run = ProgressStyle::with_template(PROGRESS_STYLE_RUN)?;
