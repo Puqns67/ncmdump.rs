@@ -9,7 +9,7 @@ use clap::Parser;
 use glob::glob;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use ncmdump::{tag::Tag, utils::FileType};
-use ncmdump::{Ncmdump, QmcDump};
+use ncmdump::{Ncmdump, Qmcdump};
 
 mod errors;
 mod provider;
@@ -90,7 +90,7 @@ impl Program {
         let source = File::open(provider.get_path())?;
         let (mut data, tag) = match provider.get_format() {
             FileType::Ncm => self.get_data(Ncmdump::from_reader(source)?, provider),
-            FileType::Qmc => self.get_data(QmcDump::from_reader(source)?, provider),
+            FileType::Qmc => self.get_data(Qmcdump::from_reader(source)?, provider),
             FileType::Other => Err(Error::Format.into()),
         }?;
         let ext = match data.get_ref()[..4] {

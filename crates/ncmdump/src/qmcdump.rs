@@ -23,7 +23,7 @@ const KEY: [u8; 256] = [
 ];
 
 /// The qmc file dump wrapper.
-pub struct QmcDump<S>
+pub struct Qmcdump<S>
 where
     S: Read,
 {
@@ -31,7 +31,7 @@ where
     cursor: u64,
 }
 
-impl<S> QmcDump<S>
+impl<S> Qmcdump<S>
 where
     S: Read,
 {
@@ -51,17 +51,17 @@ where
         }
     }
 
-    /// Create QmcDump from reader.
+    /// Create Qmcdump from reader.
     ///
     /// # Example
     ///
     /// ```rust
     /// # use std::fs::File;
     /// #
-    /// # use ncmdump::QmcDump;
+    /// # use ncmdump::Qmcdump;
     /// #
     /// let file = File::open("res/test.qmcflac").expect("Can't open file");
-    /// let _ = QmcDump::from_reader(file).unwrap();
+    /// let _ = Qmcdump::from_reader(file).unwrap();
     /// ```
     pub fn from_reader(reader: S) -> Result<Self> {
         Ok(Self { reader, cursor: 0 })
@@ -77,11 +77,11 @@ where
     /// use std::path::Path;
     ///
     /// use anyhow::Result;
-    /// use ncmdump::QmcDump;
+    /// use ncmdump::Qmcdump;
     ///
     /// fn main() -> Result<()> {
     ///     let file = File::open("res/test.qmcflac")?;
-    ///     let mut qmc = QmcDump::from_reader(file)?;
+    ///     let mut qmc = Qmcdump::from_reader(file)?;
     ///     let music = qmc.get_data()?;
     ///
     ///     let mut target = File::options()
@@ -105,7 +105,7 @@ where
     }
 }
 
-impl<R> Read for QmcDump<R>
+impl<R> Read for Qmcdump<R>
 where
     R: Read,
 {
@@ -117,7 +117,7 @@ where
     }
 }
 
-impl<R> Seek for QmcDump<R>
+impl<R> Seek for Qmcdump<R>
 where
     R: Read + Seek,
 {
@@ -128,7 +128,7 @@ where
 }
 
 #[cfg(feature = "id3")]
-impl<S: Read> crate::tag::Tag for QmcDump<S> {}
+impl<S: Read> crate::tag::Tag for Qmcdump<S> {}
 
 #[cfg(test)]
 mod tests {
@@ -141,21 +141,21 @@ mod tests {
 
     #[test]
     fn test_qmcdump_map_ok() {
-        let dest = QmcDump::<File>::map_l(0x99);
+        let dest = Qmcdump::<File>::map_l(0x99);
         assert_eq!(dest, 146);
 
-        let dest = QmcDump::<File>::map_l(0x8FFF);
+        let dest = Qmcdump::<File>::map_l(0x8FFF);
         assert_eq!(dest, 195);
     }
 
     #[test]
     fn test_qmcdump_encrypt_ok() {
         let mut data = [0x00, 0x01, 0x02, 0x03];
-        QmcDump::<File>::encrypt(0, &mut data);
+        Qmcdump::<File>::encrypt(0, &mut data);
         assert_eq!(data, [0xC3, 0x4B, 0xD4, 0xC9]);
 
         let mut data = [0x00, 0x01, 0x02, 0x03];
-        QmcDump::<File>::encrypt(0x7fff, &mut data);
+        Qmcdump::<File>::encrypt(0x7fff, &mut data);
         assert_eq!(data, [0x4A, 0x4B, 0xD4, 0xC9]);
     }
 
@@ -163,12 +163,12 @@ mod tests {
     fn test_encrypt_head_ok() -> Result<()> {
         // fLaC
         let mut input = [0xA5, 0x06, 0xB7, 0x89];
-        QmcDump::<File>::encrypt(0, &mut input);
+        Qmcdump::<File>::encrypt(0, &mut input);
         assert_eq!(input, [0x66, 0x4C, 0x61, 0x43]);
 
         // ID3
         let mut input = [0x8A, 0x0E, 0xE5];
-        QmcDump::<File>::encrypt(0, &mut input);
+        Qmcdump::<File>::encrypt(0, &mut input);
         assert_eq!(input, [0x49, 0x44, 0x33]);
         Ok(())
     }
@@ -180,7 +180,7 @@ mod tests {
             .create(true)
             .write(true)
             .open("res/test.flac")?;
-        let mut qmc = QmcDump::from_reader(input)?;
+        let mut qmc = Qmcdump::from_reader(input)?;
         let data = qmc.get_data()?;
         output.write_all(&data)?;
         Ok(())
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn test_qmcdump_read_ok() -> Result<()> {
         let input = Cursor::new([0x00, 0x01, 0x02, 0x03]);
-        let mut qmc = QmcDump::from_reader(input)?;
+        let mut qmc = Qmcdump::from_reader(input)?;
         let mut buf = [0; 4];
         let size = qmc.read(&mut buf)?;
         assert_eq!(size, 4);
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn test_qmcdump_multi_read_ok() -> Result<()> {
         let input = Cursor::new([0x00, 0x01, 0x02, 0x03]);
-        let mut qmc = QmcDump::from_reader(input)?;
+        let mut qmc = Qmcdump::from_reader(input)?;
         let mut buf = [0; 2];
         let size = qmc.read(&mut buf)?;
         assert_eq!(size, 2);

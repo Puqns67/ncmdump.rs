@@ -52,7 +52,7 @@ pub use crate::ncmdump::NcmInfo;
 pub use crate::ncmdump::Ncmdump;
 
 #[cfg(feature = "qmcdump")]
-pub use crate::qmcdump::QmcDump;
+pub use crate::qmcdump::Qmcdump;
 
 #[cfg(feature = "id3")]
 pub mod tag;
