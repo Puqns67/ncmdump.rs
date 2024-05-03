@@ -12,4 +12,8 @@ pub enum Error {
     Metadata,
     #[error("Worker can't less than 0 and more than 8")]
     Worker,
+    #[error("Output file already exists")]
+    Exists,
+    #[error("Can't dump file")]
+    Dump,
 }

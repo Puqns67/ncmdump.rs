@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -29,17 +29,21 @@ struct Command {
 
     /// Specified the output directory.
     /// Default it's the same directory with input file.
-    #[arg(short = 'o', long = "output")]
+    #[arg(short, long)]
     output: Option<String>,
 
     /// Verbosely list files processing.
-    #[arg(short = 'v', long = "verbose")]
+    #[arg(short, long)]
     verbose: bool,
 
     /// The process work count.
     /// It should more than 0 and less than 9.
-    #[arg(short = 'w', long = "worker", default_value = "1")]
+    #[arg(short, long, default_value = "1")]
     worker: usize,
+
+    /// Force to overwrite file.
+    #[arg(short, long)]
+    force: bool,
 }
 
 /// The global program
@@ -71,12 +75,10 @@ impl Program {
         if !self.command.verbose {
             return Ok(None);
         }
-        let style = ProgressStyle::with_template(SINGLE_PSTYPE)?;
-        let progress = self
-            .group
-            .insert_from_back(1, ProgressBar::new(provider.get_size()).with_style(style));
-        progress.set_message(provider.get_name());
-        Ok(Some(progress))
+        let progress = ProgressBar::new(provider.get_size())
+            .with_message(provider.get_name())
+            .with_style(ProgressStyle::with_template(SINGLE_PSTYPE)?);
+        Ok(Some(self.group.insert_from_back(1, progress)))
     }
 
     fn finish(&self) {
@@ -88,19 +90,35 @@ impl Program {
         P: DataProvider,
     {
         let source = File::open(provider.get_path())?;
-        let (mut data, tag) = match provider.get_format() {
-            FileType::Ncm => self.get_data(Ncmdump::from_reader(source)?, provider),
-            FileType::Qmc => self.get_data(Qmcdump::from_reader(source)?, provider),
+        match provider.get_format() {
+            FileType::Ncm => self.dump_data(Ncmdump::from_reader(source)?, provider),
+            FileType::Qmc => self.dump_data(Qmcdump::from_reader(source)?, provider),
             FileType::Other => Err(Error::Format.into()),
-        }?;
-        let ext = match data.get_ref()[..4] {
-            [0x66, 0x4C, 0x61, 0x43] => Ok("flac"),
-            [0x49, 0x44, 0x33, _] => Ok("mp3"),
-            _ => Err(Error::Format),
-        }?;
-        if let Some(t) = tag {
-            t.write_to(&mut data, id3::Version::Id3v24)?;
         }
+    }
+
+    fn dump_data<R, P>(&self, mut source: R, provider: &P) -> Result<()>
+    where
+        R: Read + Tag,
+        P: DataProvider,
+    {
+        let progress = self.create_progress(provider)?;
+        let mut data: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+        let mut buffer = [0; 1024];
+        let mut ext_buffer = [0; 4];
+
+        // Get file extensions early and return quickly if formatted incorrectly
+        let ext = match source.read(&mut ext_buffer) {
+            Ok(4) => match ext_buffer {
+                [0x66, 0x4C, 0x61, 0x43] => Ok("flac"),
+                [0x49, 0x44, 0x33, _] => Ok("mp3"),
+                _ => Err(Error::Format),
+            },
+            Ok(_) => Err(Error::Format),
+            _ => Err(Error::Dump),
+        }?;
+
+        // Get output file path
         let path = provider.get_path();
         let parent = match &self.command.output {
             None => path.parent().ok_or(Error::Path)?,
@@ -108,38 +126,52 @@ impl Program {
         };
         let file_name = path.file_stem().ok_or(Error::Path)?;
         let path = parent.join(file_name).with_extension(ext);
-        let mut target = File::options().create(true).write(true).open(path)?;
-        target.write_all(&data.into_inner())?;
-        Ok(())
-    }
 
-    fn get_data<R, P>(
-        &self,
-        mut dump: R,
-        provider: &P,
-    ) -> Result<(Cursor<Vec<u8>>, Option<id3::Tag>)>
-    where
-        R: Read + Tag,
-        P: DataProvider,
-    {
-        let mut data: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let mut buffer = [0; 1024];
-        let progress = self.create_progress(provider)?;
-        while let Ok(size) = dump.read(&mut buffer) {
-            if size == 0 {
-                data.rewind()?;
-                break;
-            }
-            data.write_all(&buffer[..size])?;
-            self.total.inc(size as u64);
-            if let Some(p) = &progress {
-                p.inc(size as u64);
+        // Open / Create file
+        let mut option = OpenOptions::new();
+        option.truncate(true).write(true);
+        let mut target = match (path.exists(), self.command.force) {
+            (false, _) => option.create(true).open(path),
+            (true, true) => option.open(path),
+            (true, false) => return Err(Error::Exists.into()),
+        }?;
+
+        // Don't lose these 4 bits
+        data.write_all(&ext_buffer)?;
+
+        // Read data
+        loop {
+            if let Ok(size) = source.read(&mut buffer) {
+                if size == 0 {
+                    break;
+                }
+
+                data.write_all(&buffer[..size])?;
+
+                // Update progress bar
+                self.total.inc(size as u64);
+                if let Some(p) = &progress {
+                    p.inc(size as u64);
+                }
+            } else {
+                return Err(Error::Dump.into());
             }
         }
+
+        // Write tag
+        if let Ok(t) = source.get_tag() {
+            data.rewind()?;
+            t.write_to_file(&mut data, id3::Version::Id3v24)?;
+        }
+
+        target.write_all(&data.into_inner())?;
+
+        // Finish progress bar
         if let Some(p) = &progress {
             p.finish();
         }
-        Ok((data, dump.get_tag().ok()))
+
+        Ok(())
     }
 
     fn start(&self) -> Result<()> {
@@ -197,9 +229,7 @@ impl Program {
 }
 
 fn main() -> Result<()> {
-    let command = Command::parse();
-    let program = Program::new(command)?;
-    program.start()
+    Program::new(Command::parse())?.start()
 }
 
 #[cfg(test)]
