@@ -14,11 +14,14 @@ use ncmdump::{Ncmdump, Qmcdump};
 mod errors;
 mod provider;
 
-use errors::Error;
+use errors::{DumpError, Error};
 use provider::{DataProvider, FileProvider};
 
-const TOTAL_PSTYPE: &str = "[{bar:40.cyan}] |{percent:>3!}%| {bytes:>10!}/{total_bytes:10!}";
-const SINGLE_PSTYPE: &str = "[{bar:40.cyan}] |{percent:>3!}%| {bytes:>10!}/{total_bytes:10!} {msg}";
+const PBCHARS: &str = "=> ";
+const PBSTYLE_SINGLE: &str =
+    "{wide_msg:!} {bytes} {bytes_per_sec} {eta} [{bar:36.cyan}] {percent:>3}%";
+const PBSTYLE_TOTAL: &str =
+    "{spinner} [{elapsed_precise}] [{wide_bar:.cyan}] {bytes}/{total_bytes} {bytes_per_sec}";
 
 #[derive(Clone, Debug, Default, Parser)]
 #[command(name = "ncmdump", bin_name = "ncmdump", about, version)]
@@ -50,25 +53,25 @@ struct Command {
 #[derive(Clone)]
 struct Program {
     command: Arc<Command>,
-    group: MultiProgress,
     total: ProgressBar,
+    group: MultiProgress,
 }
 
 impl Program {
     /// Create a new command progress.
     fn new(command: Command) -> Result<Self> {
         let group = MultiProgress::new();
-        let style = ProgressStyle::with_template(TOTAL_PSTYPE)?;
-        let total = group.add(ProgressBar::new(0).with_style(style));
+        let total = ProgressBar::new(0)
+            .with_style(ProgressStyle::with_template(PBSTYLE_TOTAL)?.progress_chars(PBCHARS));
         Ok(Self {
             command: Arc::new(command),
+            total: group.add(total),
             group,
-            total,
         })
     }
 
     /// Create a new progress.
-    fn create_progress<P>(&self, provider: &P) -> Result<Option<ProgressBar>>
+    fn new_progress<P>(&self, provider: &P) -> Result<Option<ProgressBar>>
     where
         P: DataProvider,
     {
@@ -77,7 +80,7 @@ impl Program {
         }
         let progress = ProgressBar::new(provider.get_size())
             .with_message(provider.get_name())
-            .with_style(ProgressStyle::with_template(SINGLE_PSTYPE)?);
+            .with_style(ProgressStyle::with_template(PBSTYLE_SINGLE)?.progress_chars(PBCHARS));
         Ok(Some(self.group.insert_from_back(1, progress)))
     }
 
@@ -90,10 +93,23 @@ impl Program {
         P: DataProvider,
     {
         let source = File::open(provider.get_path())?;
-        match provider.get_format() {
+        let result = match provider.get_format() {
             FileType::Ncm => self.dump_data(Ncmdump::from_reader(source)?, provider),
             FileType::Qmc => self.dump_data(Qmcdump::from_reader(source)?, provider),
-            FileType::Other => Err(Error::Format.into()),
+            FileType::Other => Err(DumpError::Format.into()),
+        };
+        match result {
+            Ok(()) => Ok(()),
+            Err(ref e) => {
+                if let Some(e) = e.downcast_ref::<DumpError>() {
+                    if self.command.verbose {
+                        self.group
+                            .println(format!("[Warning] {e}: {}", provider.get_name()))?;
+                    }
+                    return Ok(());
+                }
+                result
+            }
         }
     }
 
@@ -102,7 +118,7 @@ impl Program {
         R: Read + Tag,
         P: DataProvider,
     {
-        let progress = self.create_progress(provider)?;
+        let progress = self.new_progress(provider)?;
         let mut data: Cursor<Vec<u8>> = Cursor::new(Vec::new());
         let mut buffer = [0; 1024];
         let mut ext_buffer = [0; 4];
@@ -112,10 +128,10 @@ impl Program {
             Ok(4) => match ext_buffer {
                 [0x66, 0x4C, 0x61, 0x43] => Ok("flac"),
                 [0x49, 0x44, 0x33, _] => Ok("mp3"),
-                _ => Err(Error::Format),
+                _ => Err(DumpError::Format),
             },
-            Ok(_) => Err(Error::Format),
-            _ => Err(Error::Dump),
+            Ok(_) => Err(DumpError::Format),
+            Err(e) => return Err(e.into()),
         }?;
 
         // Get output file path
@@ -125,15 +141,15 @@ impl Program {
             Some(p) => Path::new(p),
         };
         let file_name = path.file_stem().ok_or(Error::Path)?;
-        let path = parent.join(file_name).with_extension(ext);
+        let target_path = parent.join(file_name).with_extension(ext);
 
         // Open / Create file
         let mut option = OpenOptions::new();
         option.truncate(true).write(true);
-        let mut target = match (path.exists(), self.command.force) {
-            (false, _) => option.create(true).open(path),
-            (true, true) => option.open(path),
-            (true, false) => return Err(Error::Exists.into()),
+        let mut target = match (target_path.exists(), self.command.force) {
+            (false, _) => option.create(true).open(target_path),
+            (true, true) => option.open(target_path),
+            (true, false) => return Err(DumpError::Exists.into()),
         }?;
 
         // Don't lose these 4 bits
@@ -141,20 +157,24 @@ impl Program {
 
         // Read data
         loop {
-            if let Ok(size) = source.read(&mut buffer) {
-                if size == 0 {
-                    break;
-                }
+            // Read data from dumper
+            match source.read(&mut buffer) {
+                Ok(size) => {
+                    // Break the loop if the size of data read is zero
+                    if size == 0 {
+                        break;
+                    }
 
-                data.write_all(&buffer[..size])?;
+                    // Write data from buffer
+                    data.write_all(&buffer[..size])?;
 
-                // Update progress bar
-                self.total.inc(size as u64);
-                if let Some(p) = &progress {
-                    p.inc(size as u64);
+                    // Update progress bar
+                    self.total.inc(size as u64);
+                    if let Some(p) = &progress {
+                        p.inc(size as u64);
+                    }
                 }
-            } else {
-                return Err(Error::Dump.into());
+                Err(e) => return Err(e.into()),
             }
         }
 
