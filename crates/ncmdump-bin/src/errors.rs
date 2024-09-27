@@ -17,6 +17,8 @@ pub enum Error {
     Worker,
     #[error("Dump err: {0}")]
     Dump(String),
+    #[error("Output file already exists")]
+    Exists,
 }
 
 #[cfg(target_os = "windows")]

@@ -17,6 +17,11 @@ pub(crate) struct Command {
     #[arg(short = 'o', long = "output")]
     pub(crate) output: Option<String>,
 
+    /// Force to overwrite file if file already exists.
+    /// By default, if the file already exists, it will be skipped.
+    #[arg(short = 'O', long)]
+    pub(crate) overwrite: bool,
+
     /// Verbosely list files processing.
     #[arg(short = 'v', long = "verbose")]
     pub(crate) verbose: bool,
