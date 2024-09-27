@@ -6,11 +6,11 @@
 use std::fs::File;
 use std::io::{Error, Write};
 
-use ncmdump::Ncmdump;
+use ncmdump::NcmDump;
 
 fn main() -> Result<(), Error> {
     let file = File::open("res/test.ncm")?;
-    let mut ncm = Ncmdump::from_reader(file).expect("Can't create dump");
+    let mut ncm = NcmDump::from_reader(file).expect("Can't create dump");
     let data = ncm.get_data().expect("Can't get data");
 
     let mut target = File::options()

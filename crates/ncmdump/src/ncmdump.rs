@@ -72,7 +72,7 @@ pub struct NcmInfo {
 }
 
 /// The ncm file dump wrapper.
-pub struct Ncmdump<S>
+pub struct NcmDump<S>
 where
     S: Read,
 {
@@ -123,7 +123,7 @@ impl NcmId {
     }
 }
 
-impl<S> Ncmdump<S>
+impl<S> NcmDump<S>
 where
     S: Read,
 {
@@ -141,7 +141,7 @@ where
     fn encrypt(&mut self, offset: u64, buffer: &mut [u8]) {
         for (i, byte) in buffer.iter_mut().enumerate() {
             let j = ((offset + i as u64 + 1) & 0xff) as usize;
-            let k = (self.key_box[j as usize].wrapping_add(j as u8)) as usize;
+            let k = (self.key_box[j].wrapping_add(j as u8)) as usize;
             let key_index = self.key_box[k].wrapping_add(self.key_box[j]) as usize;
             *byte ^= self.key_box[key_index]
         }
@@ -176,11 +176,11 @@ where
     }
 }
 
-impl<S> Ncmdump<S>
+impl<S> NcmDump<S>
 where
     S: Read + Seek,
 {
-    /// Create a Ncmdump from a seekable reader.
+    /// Create a NcmDump from a seekable reader.
     /// Usually, the reader is a `File` or `Cursor`.
     ///
     /// # Example
@@ -190,23 +190,23 @@ where
     /// ```rust
     /// # use std::fs::File;
     /// #
-    /// # use ncmdump::Ncmdump;
+    /// # use ncmdump::NcmDump;
     /// #
     /// let file = File::open("res/test.ncm").expect("Can't open file");
-    /// let _ = Ncmdump::from_reader(file).unwrap();
+    /// let _ = NcmDump::from_reader(file).unwrap();
     /// ```
     /// Or from a Cursor.
     /// ```rust
     /// # use std::fs::File;
     /// # use std::io::{Cursor, Read};
     /// #
-    /// # use ncmdump::Ncmdump;
+    /// # use ncmdump::NcmDump;
     /// #
     /// # let mut file = File::open("res/test.ncm").expect("Can't open file.");
     /// # let mut data = Vec::new();
     /// # file.read_to_end(&mut data).expect("Can't read file");
     /// let cursor = Cursor::new(data);
-    /// let _ = Ncmdump::from_reader(cursor).unwrap();
+    /// let _ = NcmDump::from_reader(cursor).unwrap();
     /// ```
     pub fn from_reader(mut reader: S) -> Result<Self> {
         // check format
@@ -279,11 +279,11 @@ where
     /// use std::path::Path;
     ///
     /// use anyhow::Result;
-    /// use ncmdump::Ncmdump;
+    /// use ncmdump::NcmDump;
     ///
     /// fn main() -> Result<()> {
     ///     let file = File::open("res/test.ncm")?;
-    ///     let mut ncm = Ncmdump::from_reader(file)?;
+    ///     let mut ncm = NcmDump::from_reader(file)?;
     ///     let info = ncm.get_info();
     ///     println!("{:?}", info);
     ///     Ok(())
@@ -316,12 +316,12 @@ where
     /// use std::path::Path;
     ///
     /// use anyhow::Result;
-    /// use ncmdump::Ncmdump;
+    /// use ncmdump::NcmDump;
     ///
     /// fn main() -> Result<()> {
     ///     use std::io::Write;
     /// let file = File::open("res/test.ncm")?;
-    ///     let mut ncm = Ncmdump::from_reader(file)?;
+    ///     let mut ncm = NcmDump::from_reader(file)?;
     ///     let image = ncm.get_image()?;
     ///
     ///     let mut target = File::options()
@@ -348,11 +348,11 @@ where
     /// use std::path::Path;
     ///
     /// use anyhow::Result;
-    /// use ncmdump::Ncmdump;
+    /// use ncmdump::NcmDump;
     ///
     /// fn main() -> Result<()> {
     ///     let file = File::open("res/test.ncm")?;
-    ///     let mut ncm = Ncmdump::from_reader(file)?;
+    ///     let mut ncm = NcmDump::from_reader(file)?;
     ///     let music = ncm.get_data()?;
     ///
     ///     let mut target = File::options()
@@ -376,7 +376,7 @@ where
     }
 }
 
-impl<R> Read for Ncmdump<R>
+impl<R> Read for NcmDump<R>
 where
     R: Read + Seek,
 {
@@ -388,7 +388,7 @@ where
     }
 }
 
-impl<R> Seek for Ncmdump<R>
+impl<R> Seek for NcmDump<R>
 where
     R: Read + Seek,
 {
@@ -414,14 +414,14 @@ pub mod tests {
     #[test]
     fn test_create_dump_ok() -> Result<()> {
         let reader = File::open("res/test.ncm")?;
-        let _ = Ncmdump::from_reader(reader)?;
+        let _ = NcmDump::from_reader(reader)?;
         Ok(())
     }
 
     #[test]
     fn test_get_info_ok() -> Result<()> {
         let reader = File::open("res/test.ncm")?;
-        let mut ncm = Ncmdump::from_reader(reader)?;
+        let mut ncm = NcmDump::from_reader(reader)?;
         let info = ncm.get_info()?;
 
         assert_eq!(
@@ -585,7 +585,7 @@ pub mod tests {
     #[test]
     fn test_get_image_ok() -> Result<()> {
         let reader = File::open("res/test.ncm")?;
-        let mut ncm = Ncmdump::from_reader(reader)?;
+        let mut ncm = NcmDump::from_reader(reader)?;
         let image = ncm.get_image()?;
         let length = image.len();
 
@@ -611,7 +611,7 @@ pub mod tests {
     #[test]
     fn test_get_data_ok() -> Result<()> {
         let reader = File::open("res/test.ncm")?;
-        let mut ncm = Ncmdump::from_reader(reader)?;
+        let mut ncm = NcmDump::from_reader(reader)?;
         let data = ncm.get_data()?;
         let length = data.len();
 
@@ -636,7 +636,7 @@ pub mod tests {
     #[test]
     fn test_encrypt_ok() -> Result<()> {
         let reader = File::open("res/test.ncm")?;
-        let mut ncm = Ncmdump::from_reader(reader)?;
+        let mut ncm = NcmDump::from_reader(reader)?;
         let mut data = [63, 246, 41, 107];
         ncm.encrypt(0, &mut data);
         assert_eq!(data, [102, 76, 97, 67]);
@@ -646,7 +646,7 @@ pub mod tests {
     #[test]
     fn test_ncmdump_read_ok() -> Result<()> {
         let reader = File::open("res/test.ncm")?;
-        let mut ncm = Ncmdump::from_reader(reader)?;
+        let mut ncm = NcmDump::from_reader(reader)?;
         let mut buf = [0; 4];
 
         let size = ncm.read(&mut buf)?;
@@ -658,7 +658,7 @@ pub mod tests {
     #[test]
     fn test_ncmdump_multi_read_ok() -> Result<()> {
         let reader = File::open("res/test.ncm")?;
-        let mut ncm = Ncmdump::from_reader(reader)?;
+        let mut ncm = NcmDump::from_reader(reader)?;
         let mut buf = [0; 4];
 
         let size = ncm.read(&mut buf)?;
@@ -734,7 +734,7 @@ pub mod tests {
             0x31, 0x35, 0x31, 0x34, 0x36, 0x2C, 0x22, 0x66, 0x6F, 0x72, 0x6D, 0x61, 0x74, 0x22,
             0x3A, 0x22, 0x66, 0x6C, 0x61, 0x63, 0x22, 0x7D,
         ];
-        let result = Ncmdump::<File>::decrypt(&source, &key).unwrap();
+        let result = NcmDump::<File>::decrypt(&source, &key).unwrap();
         assert_eq!(&result[..], &target);
     }
 
@@ -770,6 +770,6 @@ pub mod tests {
             0x18, 0x6B, 0x79, 0xFC, 0xAF, 0x5E, 0x9F, 0x7E, 0x91, 0xDD, 0x16, 0x94, 0x0F, 0x06,
             0x67, 0x25, 0x0C, 0x1C,
         ];
-        assert_eq!(Ncmdump::<File>::build_key_box(&key), key_box);
+        assert_eq!(NcmDump::<File>::build_key_box(&key), key_box);
     }
 }

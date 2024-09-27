@@ -22,11 +22,11 @@
 //! use std::io::{Error, Write};
 //! use std::path::Path;
 //!
-//! use ncmdump::Ncmdump;
+//! use ncmdump::NcmDump;
 //!
 //! fn main() -> Result<(), Error> {
 //!     let file = File::open("res/test.ncm")?;
-//!     let mut ncm = Ncmdump::from_reader(file).expect("Can't create dump");
+//!     let mut ncm = NcmDump::from_reader(file).expect("Can't create dump");
 //!     let music = ncm.get_data().expect("Can't get data");
 //!     let mut target = File::options()
 //!         .create(true)
@@ -38,9 +38,12 @@
 //! ```
 //!
 #[cfg(feature = "ncmdump")]
-pub use crate::ncmdump::NcmInfo;
+pub use crate::ncmdump::NcmDump;
+#[deprecated = "Rename as NcmDump"]
 #[cfg(feature = "ncmdump")]
-pub use crate::ncmdump::Ncmdump;
+pub use crate::ncmdump::NcmDump as Ncmdump;
+#[cfg(feature = "ncmdump")]
+pub use crate::ncmdump::NcmInfo;
 #[cfg(feature = "qmcdump")]
 pub use crate::qmcdump::QmcDump;
 

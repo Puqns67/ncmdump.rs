@@ -17,7 +17,7 @@ pub enum FileType {
 impl FileType {
     /// Return the file type of the reader.
     ///
-    /// > Notice: This function can't resolve the `Ncmdump` or `QmcDump`
+    /// > Notice: This function can't resolve the `NcmDump` or `QmcDump`
     ///
     /// # Example
     ///
@@ -52,7 +52,7 @@ impl FileType {
 
 /// Return the file type of the reader.
 ///
-/// > Notice: This function can't resolve the `Ncmdump` or `QmcDump`
+/// > Notice: This function can't resolve the `NcmDump` or `QmcDump`
 ///
 /// # Example
 ///
@@ -73,7 +73,7 @@ where
 
 /// Check if the reader is ncm format.
 ///
-/// > Notice: The function can't resolve the `Ncmdump` or `QmcDump`
+/// > Notice: The function can't resolve the `NcmDump` or `QmcDump`
 ///
 /// # Example
 ///
@@ -95,7 +95,7 @@ where
 
 /// Check if the reader is qmc format.
 ///
-/// > Notice: The function can't resolve the `Ncmdump` or `QmcDump`
+/// > Notice: The function can't resolve the `NcmDump` or `QmcDump`
 ///
 /// # Example
 ///

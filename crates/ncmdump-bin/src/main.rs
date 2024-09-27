@@ -7,9 +7,9 @@ use std::thread;
 use anyhow::Result;
 use clap::Parser;
 
-use ncmdump::{Ncmdump, QmcDump};
 use ncmdump::error::Errors;
 use ncmdump::utils::FileType;
+use ncmdump::{NcmDump, QmcDump};
 
 use crate::command::Command;
 use crate::errors::Error;
@@ -47,7 +47,7 @@ impl Program {
     {
         let source = File::open(provider.get_path())?;
         let data = match provider.get_format() {
-            FileType::Ncm => self.get_data(Ncmdump::from_reader(source)?, provider),
+            FileType::Ncm => self.get_data(NcmDump::from_reader(source)?, provider),
             FileType::Qmc => self.get_data(QmcDump::from_reader(source)?, provider),
             FileType::Other => Err(Error::Format.into()),
         }?;
@@ -74,7 +74,7 @@ impl Program {
             .open(target_path)?;
         if provider.get_format() == FileType::Ncm {
             let file = File::open(provider.get_path())?;
-            let mut dump = Ncmdump::from_reader(file)?;
+            let mut dump = NcmDump::from_reader(file)?;
             let image = dump.get_image()?;
             let info = dump.get_info()?;
             if ext == "mp3" {

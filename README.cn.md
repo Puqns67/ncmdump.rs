@@ -1,4 +1,4 @@
-# Ncmdump.rs
+# NcmDump.rs
 
 ![](https://github.com/iqiziqi/ncmdump.rs/workflows/test/badge.svg)
 ![](https://github.com/iqiziqi/ncmdump.rs/workflows/deploy/badge.svg)
@@ -70,12 +70,12 @@ use std::fs::File;
 use std::path::Path;
 
 use anyhow::Result;
-use ncmdump::Ncmdump;
+use ncmdump::NcmDump;
 
 fn main() -> Result<()> {
     use std::io::Write;
     let file = File::open("res/test.ncm")?;
-    let mut ncm = Ncmdump::from_reader(file)?;
+    let mut ncm = NcmDump::from_reader(file)?;
     let music = ncm.get_data()?;
     let mut target = File::options()
         .create(true)
