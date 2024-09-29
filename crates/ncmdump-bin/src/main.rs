@@ -1,5 +1,5 @@
-use std::fs::File;
-use std::io::{Read, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{Cursor, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
@@ -7,7 +7,6 @@ use std::thread;
 use anyhow::Result;
 use clap::Parser;
 
-use ncmdump::error::Errors;
 use ncmdump::utils::FileType;
 use ncmdump::{NcmDump, QmcDump};
 
@@ -46,70 +45,111 @@ impl Program {
         P: DataProvider,
     {
         let source = File::open(provider.get_path())?;
-        let data = match provider.get_format() {
-            FileType::Ncm => self.get_data(NcmDump::from_reader(source)?, provider),
-            FileType::Qmc => self.get_data(QmcDump::from_reader(source)?, provider),
+        let result = match provider.get_format() {
+            FileType::Ncm => self.dump_data(provider, NcmDump::from_reader(source)?),
+            FileType::Qmc => self.dump_data(provider, QmcDump::from_reader(source)?),
             FileType::Other => Err(Error::Format.into()),
-        }?;
-        let ext = match data[..4] {
-            [0x66, 0x4C, 0x61, 0x43] => Ok("flac"),
-            [0x49, 0x44, 0x33, _] => Ok("mp3"),
-            _ => Err(Error::Format),
-        }?;
-
-        let path = provider.get_path();
-        let target_path = match &self.command.output {
-            None => path.with_extension(ext),
-            Some(p) => Path::new(p)
-                .join(
-                    path.file_name()
-                        .ok_or(Errors::IO("Can't get file name".into()))?,
-                )
-                .with_extension(ext),
         };
-        let mut target = File::options()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(target_path)?;
-        if provider.get_format() == FileType::Ncm {
-            let file = File::open(provider.get_path())?;
-            let mut dump = NcmDump::from_reader(file)?;
-            let image = dump.get_image()?;
-            let info = dump.get_info()?;
-            if ext == "mp3" {
-                let buffer = Mp3Metadata::new(&info, &image, &data).inject_metadata(data)?;
-                target.write_all(&buffer)?;
-            } else if ext == "flac" {
-                let buffer = FlacMetadata::new(&info, &image, &data).inject_metadata(data)?;
-                target.write_all(&buffer)?;
-            }
+        if let Err(ref e) = result {
+            self.state
+                .println(format!("[Warning] {e}: {:?}", provider.get_path()))?;
         }
         Ok(())
     }
 
-    fn get_data<R, P>(&self, mut dump: R, provider: &P) -> Result<Vec<u8>>
+    fn dump_data<R, P>(&self, provider: &P, mut source: R) -> Result<()>
     where
         R: Read,
         P: DataProvider,
     {
-        let mut data = Vec::new();
-        let mut buffer = [0; 1024];
         let progress = self.state.create_progress(provider)?;
-        while let Ok(size) = dump.read(&mut buffer) {
-            if size == 0 {
-                break;
-            }
-            data.write_all(&buffer[..size])?;
-            self.state.inc(size as u64);
-            if let Some(p) = &progress {
-                p.inc(size as u64);
+        let mut data: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+        let mut buffer = [0; 1024];
+        let mut ext_buffer = [0; 4];
+
+        // Get file extensions early and return quickly if formatted incorrectly
+        let ext = match source.read(&mut ext_buffer) {
+            Ok(4) => match ext_buffer {
+                [0x66, 0x4C, 0x61, 0x43] => Ok("flac"),
+                [0x49, 0x44, 0x33, _] => Ok("mp3"),
+                _ => Err(Error::Format),
+            },
+            Ok(_) => Err(Error::Format),
+            Err(e) => return Err(e.into()),
+        }?;
+
+        // Get output file path
+        let path = provider.get_path();
+        let parent = match &self.command.output {
+            None => path.parent().ok_or(Error::Path(format!(
+                "Can't get output dir for target: {:?}",
+                provider.get_path()
+            )))?,
+            Some(p) => Path::new(p),
+        };
+        let target_path = parent.join(provider.get_name()).with_extension(ext);
+
+        // Open / Create file
+        let mut option = OpenOptions::new();
+        option.truncate(true).write(true);
+        let mut target = match (target_path.exists(), self.command.overwrite) {
+            (false, _) => option.create(true).open(target_path),
+            (true, true) => option.open(target_path),
+            (true, false) => return Err(Error::Exists.into()),
+        }?;
+
+        // Don't lose these 4 bits
+        data.write_all(&ext_buffer)?;
+
+        // Read data
+        loop {
+            // Read data from dumper
+            match source.read(&mut buffer) {
+                Ok(size) => {
+                    // Break the loop if the size of data read is zero
+                    if size == 0 {
+                        break;
+                    }
+
+                    // Write data from buffer
+                    data.write_all(&buffer[..size])?;
+
+                    // Update progress bar
+                    self.state.inc(size as u64);
+                    if let Some(p) = &progress {
+                        p.inc(size as u64);
+                    }
+                }
+                Err(e) => return Err(e.into()),
             }
         }
+
+        let data = data.into_inner();
+
+        match provider.get_format() {
+            FileType::Ncm => {
+                let file = File::open(provider.get_path())?;
+                let mut dump = NcmDump::from_reader(file)?;
+                let image = dump.get_image()?;
+                let info = dump.get_info()?;
+                if ext == "mp3" {
+                    let buffer = Mp3Metadata::new(&info, &image, &data).inject_metadata(data)?;
+                    target.write_all(&buffer)?;
+                } else if ext == "flac" {
+                    let buffer = FlacMetadata::new(&info, &image, &data).inject_metadata(data)?;
+                    target.write_all(&buffer)?;
+                }
+            }
+            FileType::Qmc => target.write_all(&data)?,
+            FileType::Other => return Err(Error::Format.into()),
+        };
+
+        // Finish progress bar
         if let Some(p) = &progress {
             p.finish();
         }
-        Ok(data)
+
+        Ok(())
     }
 
     fn start(&self) -> Result<()> {
@@ -120,7 +160,7 @@ impl Program {
         let state = self.state.clone();
         tasks.push(thread::spawn(move || {
             for path in items {
-                let provider = FileProvider::new(path).map_err(|_| Error::Path)?;
+                let provider = FileProvider::new(path)?;
                 state.inc_length(provider.get_size());
                 tx.send(provider)?;
             }

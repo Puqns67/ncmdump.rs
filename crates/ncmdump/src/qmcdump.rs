@@ -175,6 +175,7 @@ mod tests {
         let input = File::open("res/test.qmcflac")?;
         let mut output = File::options()
             .create(true)
+            .truncate(true)
             .write(true)
             .open("res/test.flac")?;
         let mut qmc = QmcDump::from_reader(input)?;

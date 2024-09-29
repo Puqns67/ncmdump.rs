@@ -2,20 +2,30 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
+use walkdir::WalkDir;
 
 use crate::errors::Error;
 
 #[derive(Clone, Debug, Default, Parser)]
 #[command(name = "ncmdump", bin_name = "ncmdump", about, version)]
 pub(crate) struct Command {
-    /// Specified the files to convert.
-    #[arg(value_name = "FILES")]
-    pub(crate) matchers: Vec<String>,
+    /// Specified the files or dirs to convert.
+    #[arg(value_name = "TARGETS")]
+    pub(crate) targets: Vec<PathBuf>,
 
     /// Specified the output directory.
     /// Default it's the same directory with input file.
     #[arg(short = 'o', long = "output")]
     pub(crate) output: Option<String>,
+
+    /// Force to overwrite file if file already exists.
+    /// By default, if the file already exists, it will be skipped.
+    #[arg(short = 'O', long)]
+    pub(crate) overwrite: bool,
+
+    /// Include file recursively
+    #[arg(short, long)]
+    pub(crate) recursive: bool,
 
     /// Verbosely list files processing.
     #[arg(short = 'v', long = "verbose")]
@@ -28,51 +38,60 @@ pub(crate) struct Command {
 }
 
 impl Command {
-    pub(crate) fn invalid(&self) -> Result<(), Error> {
+    pub(crate) fn invalid(&self) -> Result<()> {
         // Check argument worker
         if self.worker < 1 || self.worker > 8 {
-            return Err(Error::Worker);
+            return Err(Error::Worker.into());
         }
 
         // Check argument matchers
-        if self.matchers.is_empty() {
-            return Err(Error::NoFile);
+        if self.targets.is_empty() {
+            return Err(Error::NoTarget.into());
         }
 
         Ok(())
     }
 
-    #[cfg(target_os = "windows")]
-    pub(crate) fn items(&self) -> Result<Vec<PathBuf>, Error> {
-        let mut paths = Vec::new();
-        for matcher in &self.matchers {
-            for entry in glob::glob(matcher)? {
-                let path = entry?;
-                if !path.is_file() {
-                    continue;
-                }
-                paths.push(path)
-            }
-        }
-        Ok(paths)
-    }
+    pub(crate) fn items(&self) -> Result<Vec<PathBuf>> {
+        let mut result = Vec::new();
+        for target in &self.targets {
+            let target = target.to_path_buf();
 
-    #[cfg(not(target_os = "windows"))]
-    pub(crate) fn items(&self) -> Result<Vec<PathBuf>, Error> {
-        let mut paths = Vec::new();
-        for matcher in &self.matchers {
-            let path = PathBuf::from(matcher);
-            if !path.is_file() {
+            if !target.exists() {
                 continue;
             }
-            paths.push(path)
+
+            if target.is_file() {
+                result.push(target.to_path_buf());
+            } else if target.is_dir() {
+                result.append(
+                    &mut WalkDir::new(target)
+                        .min_depth(1)
+                        .max_depth({
+                            match self.recursive {
+                                true => 8,
+                                false => 1,
+                            }
+                        })
+                        .follow_links(true)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().is_file())
+                        .map(|e| e.into_path())
+                        .collect(),
+                );
+            } else {
+                return Err(Error::Path(String::from("Unsupport target type")).into());
+            }
         }
-        Ok(paths)
+        Ok(result)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use anyhow::Result;
 
     use crate::errors::Error;
@@ -81,12 +100,15 @@ mod tests {
     #[test]
     fn test_empty_input_files_err() -> Result<()> {
         let command = Command {
-            matchers: vec![],
+            targets: vec![],
             worker: 1,
             ..Default::default()
         };
         let result = command.invalid();
-        assert!(result.is_err_and(|err| err == Error::NoFile));
+        assert!(result.is_err_and(|err| err
+            .downcast_ref::<Error>()
+            .map(|err| *err == Error::NoTarget)
+            .unwrap_or(false)));
         Ok(())
     }
 
@@ -95,7 +117,7 @@ mod tests {
         let works = [1, 2, 3, 4, 5, 6, 7, 8];
         for worker in works {
             let command = Command {
-                matchers: vec![String::new()],
+                targets: vec![PathBuf::new()],
                 worker,
                 ..Default::default()
             };
@@ -110,12 +132,15 @@ mod tests {
         let works = [0, 9, 10, 15, 100, 199];
         for worker in works {
             let command = Command {
-                matchers: vec![String::new()],
+                targets: vec![PathBuf::new()],
                 worker,
                 ..Default::default()
             };
             let result = command.invalid();
-            assert!(result.is_err_and(|err| err == Error::Worker));
+            assert!(result.is_err_and(|err| err
+                .downcast_ref::<Error>()
+                .map(|err| *err == Error::Worker)
+                .unwrap_or(false)));
         }
         Ok(())
     }

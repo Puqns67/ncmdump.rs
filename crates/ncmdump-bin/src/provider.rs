@@ -43,16 +43,16 @@ impl DataProvider for FileProvider {
 }
 
 impl FileProvider {
-    pub(crate) fn new(path: PathBuf) -> Result<Self, Error> {
+    pub(crate) fn new(path: PathBuf) -> Result<Self> {
         let path = path.clone();
         let mut file = File::open(path.clone())?;
         let format = FileType::parse(&mut file)?;
         let size = file.metadata().map_err(|_| Error::Metadata)?.len();
         let name = path
             .file_name()
-            .ok_or(Error::Path)?
+            .ok_or(Error::Path(format!("Can't get filename for: {:?}", path)))?
             .to_str()
-            .ok_or(Error::Path)?
+            .ok_or(Error::Path(String::from("Can't convert filename as str")))?
             .to_string();
         Ok(FileProvider {
             name,
